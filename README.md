@@ -60,6 +60,24 @@ chmod +x start_mac.command
 shared_files
 ```
 
+## 自动清理
+
+程序默认每天早上 `08:00` 自动清空所有已上传文件和文件列表。
+
+只要运行程序的电脑在早上 8 点开机，并且这个程序还在运行，清理就会自动执行。清理后其他电脑刷新网页，会看到文件列表变空。
+
+如果以后想改成其他时间，例如每天晚上 11 点半：
+
+```bash
+python3 -B lan_file_hub.py --cleanup-time 23:30
+```
+
+如果临时不想自动清理：
+
+```bash
+python3 -B lan_file_hub.py --no-auto-cleanup
+```
+
 ## 常见问题
 
 如果其他电脑打不开地址，优先检查这几件事：
@@ -73,4 +91,3 @@ shared_files
 ```bash
 python3 -B lan_file_hub.py --port 8888
 ```
-

@@ -16,8 +16,10 @@ import re
 import shutil
 import socket
 import tempfile
+import threading
 import time
 import urllib.parse
+from datetime import datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,6 +28,7 @@ from typing import Any
 
 APP_NAME = "LAN File Hub"
 DEFAULT_PORT = 8765
+DEFAULT_CLEANUP_TIME = "08:00"
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]+")
 
 
@@ -393,12 +396,28 @@ def get_lan_ip() -> str:
         sock.close()
 
 
+def parse_daily_time(value: str) -> tuple[int, int]:
+    match = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", value.strip())
+    if not match:
+        raise argparse.ArgumentTypeError("time must use HH:MM format, for example 08:00")
+    return int(match.group(1)), int(match.group(2))
+
+
+def seconds_until(hour: int, minute: int) -> float:
+    current = datetime.now()
+    target = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= current:
+        target += timedelta(days=1)
+    return (target - current).total_seconds()
+
+
 class Store:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.files_dir = root / "files"
         self.meta_path = root / "metadata.json"
         self.files_dir.mkdir(parents=True, exist_ok=True)
+        self.lock = threading.RLock()
         self.meta: dict[str, dict[str, Any]] = self._load_meta()
 
     def _load_meta(self) -> dict[str, dict[str, Any]]:
@@ -418,54 +437,87 @@ class Store:
         tmp.replace(self.meta_path)
 
     def list_files(self) -> list[dict[str, Any]]:
-        result = []
-        for file_id, item in list(self.meta.items()):
-            path = self.files_dir / file_id
-            if not path.exists():
-                self.meta.pop(file_id, None)
-                continue
-            row = dict(item)
-            row["id"] = file_id
-            row["size"] = path.stat().st_size
-            result.append(row)
-        result.sort(key=lambda item: item.get("created_at", 0), reverse=True)
-        self._save_meta()
-        return result
+        with self.lock:
+            result = []
+            for file_id, item in list(self.meta.items()):
+                path = self.files_dir / file_id
+                if not path.exists():
+                    self.meta.pop(file_id, None)
+                    continue
+                row = dict(item)
+                row["id"] = file_id
+                row["size"] = path.stat().st_size
+                result.append(row)
+            result.sort(key=lambda item: item.get("created_at", 0), reverse=True)
+            self._save_meta()
+            return result
 
     def add_file(self, source: Path, original_name: str, owner: str) -> dict[str, Any]:
-        stem = f"{int(now() * 1000)}-{os.urandom(4).hex()}"
-        path = self.files_dir / stem
-        source.replace(path)
-        item = {
-            "original_name": original_name,
-            "owner": owner[:80],
-            "created_at": now(),
-            "size": path.stat().st_size,
-        }
-        self.meta[stem] = item
-        self._save_meta()
-        return {"id": stem, **item}
+        with self.lock:
+            stem = f"{int(now() * 1000)}-{os.urandom(4).hex()}"
+            path = self.files_dir / stem
+            source.replace(path)
+            item = {
+                "original_name": original_name,
+                "owner": owner[:80],
+                "created_at": now(),
+                "size": path.stat().st_size,
+            }
+            self.meta[stem] = item
+            self._save_meta()
+            return {"id": stem, **item}
 
     def get_path(self, file_id: str) -> Path | None:
-        if file_id not in self.meta:
-            return None
-        path = self.files_dir / file_id
-        if not path.exists():
-            return None
-        return path
+        with self.lock:
+            if file_id not in self.meta:
+                return None
+            path = self.files_dir / file_id
+            if not path.exists():
+                return None
+            return path
 
     def get_meta(self, file_id: str) -> dict[str, Any] | None:
-        return self.meta.get(file_id)
+        with self.lock:
+            meta = self.meta.get(file_id)
+            return dict(meta) if meta else None
 
     def delete(self, file_id: str) -> bool:
-        existed = file_id in self.meta
-        self.meta.pop(file_id, None)
-        path = self.files_dir / file_id
-        if path.exists():
-            path.unlink()
-            existed = True
-        self._save_meta()
-        return existed
+        with self.lock:
+            existed = file_id in self.meta
+            self.meta.pop(file_id, None)
+            path = self.files_dir / file_id
+            if path.exists():
+                path.unlink()
+                existed = True
+            self._save_meta()
+            return existed
+
+    def clear_all(self) -> int:
+        with self.lock:
+            count = 0
+            for path in self.files_dir.iterdir():
+                if path.is_file():
+                    path.unlink()
+                    count += 1
+            count = max(count, len(self.meta))
+            self.meta.clear()
+            self._save_meta()
+            return count
+
+
+def start_daily_cleanup(store: Store, cleanup_time: str, stop_event: threading.Event) -> threading.Thread:
+    hour, minute = parse_daily_time(cleanup_time)
+
+    def run() -> None:
+        while not stop_event.wait(seconds_until(hour, minute)):
+            deleted = store.clear_all()
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"[{stamp}] Daily cleanup finished. Deleted {deleted} file(s).")
+
+    thread = threading.Thread(target=run, name="daily-cleanup", daemon=True)
+    thread.start()
+    return thread
+
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -593,6 +645,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="0.0.0.0", help="Listen address, default: 0.0.0.0")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Listen port, default: {DEFAULT_PORT}")
     parser.add_argument("--data-dir", default="shared_files", help="Folder for uploaded files and metadata")
+    parser.add_argument(
+        "--cleanup-time",
+        default=DEFAULT_CLEANUP_TIME,
+        type=lambda value: value if parse_daily_time(value) else value,
+        help=f"Daily cleanup time in HH:MM, default: {DEFAULT_CLEANUP_TIME}",
+    )
+    parser.add_argument("--no-auto-cleanup", action="store_true", help="Disable daily automatic cleanup")
     return parser.parse_args()
 
 
@@ -600,11 +659,18 @@ def main() -> None:
     args = parse_args()
     data_dir = Path(args.data_dir).expanduser().resolve()
     store = Store(data_dir)
+    stop_event = threading.Event()
+    if not args.no_auto_cleanup:
+        start_daily_cleanup(store, args.cleanup_time, stop_event)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.store = store  # type: ignore[attr-defined]
     lan_ip = get_lan_ip()
     print(f"\n{APP_NAME} is running.")
     print(f"Files are saved in: {data_dir}")
+    if args.no_auto_cleanup:
+        print("Daily cleanup is disabled.")
+    else:
+        print(f"Daily cleanup time: {args.cleanup_time}")
     print(f"Open on this computer: http://127.0.0.1:{args.port}")
     print(f"Open from other computers: http://{lan_ip}:{args.port}")
     print("Press Ctrl+C to stop.\n")
@@ -613,6 +679,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
+        stop_event.set()
         server.server_close()
 
 
