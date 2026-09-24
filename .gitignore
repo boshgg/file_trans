@@ -1,0 +1,15 @@
+shared_files/
+.filehub/
+.env
+.env.*
+!.env.example
+*.lnk
+*.log
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
+Thumbs.db
+test-results/
+.impeccable/

@@ -1,0 +1,7 @@
+# Only application source enters the build context. Never include shared data,
+# credentials, repository history, downloaded binaries, or local environment.
+**
+!Dockerfile
+!lan_file_hub.py
+!web/
+!web/**

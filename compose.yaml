@@ -1,0 +1,27 @@
+# Linux Docker Engine; run Caddy directly on the same host.
+services:
+  filehub:
+    build: .
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      FILE_HUB_ACCESS_CODE: ${FILE_HUB_ACCESS_CODE:?Set a random access code of at least 16 characters in .env}
+    command:
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8765"
+      - --data-dir
+      - /data
+      - --trust-proxy
+      - --no-auto-cleanup
+    volumes:
+      - filehub_data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+
+volumes:
+  filehub_data:

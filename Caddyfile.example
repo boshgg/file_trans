@@ -1,0 +1,6 @@
+# Replace with your domain, point its DNS to this server, and allow TCP 80/443.
+# Caddy runs on the Linux host; compose.yaml binds the backend to loopback.
+files.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8765
+}
