@@ -10,6 +10,15 @@ import start_public
 
 
 class PublicLauncherTests(unittest.TestCase):
+    def test_redirected_ansi_console_can_display_chinese(self):
+        output = io.BytesIO()
+        console = io.TextIOWrapper(output, encoding="cp1252")
+        with patch.object(start_public.sys, "stdout", console):
+            start_public.configure_console()
+            print("文件传输", flush=True)
+        self.assertEqual(output.getvalue().decode("utf-8"), "文件传输\n")
+        console.detach()
+
     def test_download_is_verified_before_executing(self):
         with tempfile.TemporaryDirectory() as folder:
             payload = b"verified executable"

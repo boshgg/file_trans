@@ -32,6 +32,13 @@ ASSETS = {
 URL_PATTERN = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com\b")
 
 
+def configure_console() -> None:
+    # Redirected Windows output otherwise inherits a legacy ANSI code page.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
 def asset_key() -> tuple[str, str]:
     machine = platform.machine().lower()
     arch = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64", "i386": "386", "i686": "386", "x86": "386"}.get(machine, machine)
@@ -49,6 +56,7 @@ def digest(path: Path) -> str:
 
 
 def install_cloudflared(custom: str | None = None) -> Path:
+    configure_console()
     if custom:
         binary = Path(custom).expanduser().resolve()
         if not binary.is_file():
@@ -125,6 +133,7 @@ def wait_for_server(process: subprocess.Popen, port: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_console()
     parser = argparse.ArgumentParser(description="启动临时公网 HTTPS 文件中转站（电脑须保持开机）。其余参数传给文件服务器。")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--cloudflared", help="使用指定的可信 cloudflared 可执行文件")
@@ -148,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError(f"端口 {args.port} 已被占用，请关闭旧服务或使用 --port 8888。") from exc
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONUTF8"] = "1"
         server = subprocess.Popen([sys.executable, "-B", str(ROOT / "lan_file_hub.py"), "--host", "127.0.0.1", "--port", str(args.port), "--trust-proxy", *server_args], cwd=ROOT, env=env)
         wait_for_server(server, args.port)
         state = ROOT / ".filehub"
