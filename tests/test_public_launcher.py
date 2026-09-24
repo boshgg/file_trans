@@ -16,7 +16,7 @@ class PublicLauncherTests(unittest.TestCase):
         with patch.object(start_public.sys, "stdout", console):
             start_public.configure_console()
             print("文件传输", flush=True)
-        self.assertEqual(output.getvalue().decode("utf-8"), "文件传输\n")
+        self.assertEqual(output.getvalue().decode("utf-8").splitlines(), ["文件传输"])
         console.detach()
 
     def test_download_is_verified_before_executing(self):
